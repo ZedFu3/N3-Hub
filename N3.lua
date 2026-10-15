@@ -1,19 +1,39 @@
---!strict
--- [[ N3 HUB - UNIVERSAL LOADER ]]
-local genv = getgenv and getgenv() or _G
-if genv.N3_LOADED and (tick() - genv.N3_LOADED) <= 3 then
+local a = getgenv and getgenv()
+if not a then
     return
 end
-genv.N3_LOADED = tick()
+
+if a.n3_router_debounce and (tick() - a.n3_router_debounce) <= 5 then
+    return
+end
+a.n3_router_debounce = tick()
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
-local success, err = pcall(function()
-    loadstring(game:HttpGet("https://flowauth.net/v1/loaders/3d076138d1e2d024d3911c45f8227b1b.lua"))()
-end)
-
-if not success then
-    warn("[N3 HUB] Failed to load script: " .. tostring(err))
+local b = {
+    [107778070777162] = "N3-Sae.lua",
+}
+local c = b[game.PlaceId]
+if not c then
+    warn("N3 Hub: PlaceId tidak terdaftar!")
+    return
 end
+
+pcall(function()
+    if not loadstring then
+        return
+    end
+
+    local d = tostring(math.random(10000, 99999))
+    local e = "https://raw.githubusercontent.com/ZedFu3/N3hub-Games/refs/heads/main/Games/" .. c .. "?nocache=" .. d
+
+    local f = game:HttpGet(e)
+    if f and f ~= "" then
+        getgenv().N3_SECURE_LOAD = true
+        loadstring(f)()
+    else
+        warn("N3 Hub Don't Loaded")
+    end
+end)
