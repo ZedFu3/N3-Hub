@@ -215,7 +215,7 @@ local Library = {
 	TabSwipeOffset = 26,
 	TabSwipeFrom = "bottom",
 
-	WindowAnimationInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+	WindowAnimationInfo = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), -- v4.7.8: RESEP USER "10% bagus!" = 0.10s (knob ST_AnimTime di settings)
 	DropdownTransitionInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 	KeyPickerTransitionInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 
@@ -231,6 +231,7 @@ local Library = {
 		Groupbox = true,
 		Dropdown = true,
 		KeyPicker = true,
+		TabHoverZoom = true, -- v4.7.0: zoom icon tab pas hover/aktif
 	},
 
 	--// States \\--
@@ -404,8 +405,8 @@ local Templates = {
 		-- (ImageTransparency 0.75, ScaleType Stretch, ZIndex 999 di atas konten,
 		-- tanpa overlay). Sekarang semuanya bisa dikonfigurasi.
 		-- DEFAULT = RESEP USER v2 YANG DISETUJUI 2026-10-20 ("wah gue suka yang ini
-	-- brok sumpah gas implementasikan ke code utama"). v1 (overlay ON 0.90,
-	-- canvas 0.64) udah diganti — user minta yang v2 ini yang jadi bawaan.
+		-- brok sumpah gas implementasikan ke code utama"). v1 (overlay ON 0.90,
+		-- canvas 0.64) udah diganti — user minta yang v2 ini yang jadi bawaan.
 		-- Wallpaper AKTIF otomatis begitu library dipakai — nggak perlu seting
 		-- apa-apa. Tetep bisa di-override per-window atau lewat
 		-- Library:SetWallpaper / Library:SetSurface.
@@ -446,6 +447,7 @@ local Templates = {
 			Groupbox = true,
 			Dropdown = true,
 			KeyPicker = true,
+			TabHoverZoom = true, -- v4.7.0: zoom icon tab pas hover/aktif
 		},
 
 		TabTransitionTime = 0.22,
@@ -1539,7 +1541,7 @@ for AliasName, TargetName in {
 	Fill = "Crop",
 	Cover = "Crop",
 	Contain = "Fit",
-} do
+	} do
 	local Target = SafeScaleType(TargetName)
 	if Target and WallpaperScaleTypes[AliasName] == nil then
 		WallpaperScaleTypes[AliasName] = Target
@@ -1610,6 +1612,28 @@ Library.SurfaceWindow = nil -- MainFrame
 Library.SurfaceCanvas = {} -- instance -> true (Container, sidebar)
 Library.SurfaceGroups = {} -- instance -> true (kartu group/tabbox/depbox)
 
+-- N3V4 v4.7.0: TAB APPEARANCE (sidebar tab switcher). Permintaan user:
+-- "tab harusnya ada sedikit stroke di iconsnya ... kasih sedikit background
+-- dikit saja di semua tab ... kalo cursor ke arah tab ada animasi sedikit
+-- zoom iconnya ... tab aktif akan sedikit zoom". Semua angka = baseline,
+-- user bakal seting manual di preview terus kirim print -> bake nanti.
+Library.TabAppearance = {
+	-- v4.7.6 = RESEP TAB USER TERKUNCI (print 18:21 setelah seting manual)
+	IconStrokeThickness = 1, -- px, halo stroke glyph icon
+	IconStrokeTransparency = 0.20,
+	IconStrokeColor = Color3.fromRGB(107, 0, 181),
+	TabBackgroundTransparency = 1, -- tab biasa tanpa bg (pilihan user)
+	ActiveBackgroundTransparency = 0.85,
+	ActiveBackgroundColor = Color3.fromRGB(128, 128, 128),
+	HoverZoom = 1.30, -- scale icon pas hover
+	ActiveZoom = 1.40, -- scale icon tab aktif (nantahan)
+	ZoomTime = 0.20, -- detik, tween Quad Out
+}
+Library.TabVisuals = {} -- rec { Button, Icon, Stroke, Scale, Tab } per tab sidebar
+-- v4.7.2: version print biar nggak ada lagi debat "library lu lama/belum":
+-- baris ini MUNCUL di Output tiap require kalau library yang ke-paste emang baru.
+print("[N3V4 Library] v4.7.9 loaded — TabAppearance/TabVisuals OK + fade buka/tutup window baru (kalau baris ini NGGAK ada di Output, ModuleScript N3V4 yang ke-require masih lama)")
+
 -- Warna latar konten (Container + sidebar). Nil = ikut theme (perilaku lama).
 function Library:GetCanvasColor(): Color3
 	if typeof(Library.Surface.CanvasColor) == "Color3" then
@@ -1660,6 +1684,105 @@ function Library:ApplySurfaces()
 	end
 
 	Library:UpdateColorsUsingRegistry()
+end
+
+-- v4.6.11: kartu yang NESTED di dalam kartu lain (tabbox di dalam groupbox,
+-- groupbox di dalam tabbox, depbox di dalam tabbox, dst) nggak boleh numpuk
+-- lapis transparency kedua — kompositnya jadi gelap/solid ("nested box nya
+-- kok ga ikut transparan? ... jangan hardcode bro!"). Kalau nested:
+-- BackgroundTransparency = 1 (komposit NGIKUT kartu induk = kelihatan sama),
+-- identitas box tetep dari outline stroke. Kalau top-level: pakai Surface
+-- langsung + register ke SurfaceGroups biar slider "Kartu group" ngatur.
+function Library:IsInsideSurfaceCard(Obj: GuiObject?): boolean
+	local Cur = Obj
+	while Cur do
+		if Library.SurfaceGroups[Cur] then
+			return true
+		end
+		Cur = Cur.Parent
+	end
+	return false
+end
+
+-- v4.7.6: SATU tempat buat visual icon tab (AddTab & AddKeyTab manggil ini,
+-- nol duplikasi): halo stroke (ImageLabel di belakang icon) + UIScale buat
+-- zoom (transform-only = lebih mulus daripada tween Size).
+function Library:CreateTabIconStroke(Icon: any, TabIcon: ImageLabel): (ImageLabel, UIScale)
+	TabIcon.ZIndex = 3
+	local Halo = New("ImageLabel", {
+		Name = "TabIconStrokeHalo",
+		Image = Icon.Url,
+		ImageRectOffset = Icon.ImageRectOffset,
+		ImageRectSize = Icon.ImageRectSize,
+		ImageColor3 = Library.TabAppearance.IconStrokeColor,
+		ImageTransparency = Library.TabAppearance.IconStrokeTransparency,
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, 2 * Library.TabAppearance.IconStrokeThickness, 1, 2 * Library.TabAppearance.IconStrokeThickness),
+		ZIndex = 2,
+		Parent = TabIcon,
+	})
+	local Scale = New("UIScale", {
+		Scale = 1,
+		Parent = TabIcon,
+	})
+	return Halo, Scale
+end
+
+function Library:TweenTabZoom(ScaleObj: UIScale?, Zoom: number)
+	if not ScaleObj then
+		return
+	end
+	if Library:ZoomTabEnabled() then
+		TweenService:Create(ScaleObj, Library:GetZoomTweenInfo(), { Scale = Zoom }):Play()
+	else
+		ScaleObj.Scale = Zoom
+	end
+end
+
+function Library:GetZoomTweenInfo(): TweenInfo
+	local T = Library.TabAppearance
+	return TweenInfo.new(math.clamp(T.ZoomTime, 0.02, 1), Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+end
+
+-- v4.7.4: gate zoom yang NIL-SAFE. WindowInfo.Animations dari caller (mis.
+-- preview) bisa NIMPA tabel Animations tanpa key TabHoverZoom -> nil =
+-- falsy = hover/zoom MATI diam-diam. Nil sekarang dianggap ON.
+function Library:ZoomTabEnabled(): boolean
+	local A = Library.Animations
+	return not A or A.TabHoverZoom ~= false
+end
+
+function Library:SetTabAppearance(Info: { [string]: any })
+	local T = Library.TabAppearance
+	for Key, Val in pairs(Info or {}) do
+		if T[Key] ~= nil then
+			T[Key] = Val
+		end
+	end
+	Library:ApplyTabAppearance()
+end
+
+function Library:ApplyTabAppearance()
+	local T = Library.TabAppearance
+	for _, Rec in ipairs(Library.TabVisuals) do
+		if Rec.Stroke and Rec.Stroke.Parent then
+			Rec.Stroke.ImageColor3 = T.IconStrokeColor
+			Rec.Stroke.ImageTransparency = T.IconStrokeTransparency
+			Rec.Stroke.Size = UDim2.new(1, 2 * T.IconStrokeThickness, 1, 2 * T.IconStrokeThickness)
+			Rec.Stroke.Visible = T.IconStrokeThickness > 0
+		end
+		if Rec.Button and Rec.Button.Parent then
+			local Active = Rec.Tab ~= nil and Library.ActiveTab == Rec.Tab
+			Rec.Button.BackgroundColor3 = Active and T.ActiveBackgroundColor or Library.Scheme.MainColor
+			Rec.Button.BackgroundTransparency = Active and T.ActiveBackgroundTransparency or T.TabBackgroundTransparency
+		end
+		if Rec.Scale and Rec.Scale.Parent then
+			local Active = Rec.Tab ~= nil and Library.ActiveTab == Rec.Tab
+			Rec.Scale.Scale = Active and T.ActiveZoom or 1
+		end
+	end
 end
 
 function Library:SetBackgroundImage(Image: string | number)
@@ -2039,7 +2162,7 @@ end
 
 function GetNonOverlappingPosition(UI: GuiObject, StartPos: UDim2?)
 	local ScreenSize = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080))
-		- Vector2.new(100, 100)
+	- Vector2.new(100, 100)
 	local Start = StartPos and Vector2.new(StartPos.X.Offset, StartPos.Y.Offset) or Vector2.new(6, 6)
 	local Padding = 6
 
@@ -2308,6 +2431,7 @@ end
 
 --// Animations \\--
 local TransparencyCache = {}
+local FadeTweenCache = setmetatable({}, { __mode = "k" }) -- v4.7.7: tween fade window di-cache & dipakai ulang (weak key = instance mati ke-GC)
 local ActiveTabTweens = setmetatable({}, { __mode = "k" })
 
 function Library:PlayTabAnimation(TabCanvas: CanvasGroup, Showing: boolean, OnComplete: (() -> ())?)
@@ -3033,11 +3157,11 @@ function Library:AddContextMenu(
 			end
 
 			return true,
-				Library[string.format("%sTransitionInfo", AnimationType)] or TweenInfo.new(
-					0.18,
-					Enum.EasingStyle.Quad,
-					Enum.EasingDirection.Out
-				)
+			Library[string.format("%sTransitionInfo", AnimationType)] or TweenInfo.new(
+				0.18,
+				Enum.EasingStyle.Quad,
+				Enum.EasingDirection.Out
+			)
 		end,
 	}
 
@@ -3245,7 +3369,7 @@ Library:GiveSignal(UserInputService.InputBegan:Connect(function(Input: InputObje
 			CurrentMenu
 			and not (
 				Library:MouseIsOverFrame(CurrentMenu.Menu, Location)
-				or Library:MouseIsOverFrame(CurrentMenu.Holder, Location)
+					or Library:MouseIsOverFrame(CurrentMenu.Holder, Location)
 			)
 		then
 			CurrentMenu:Close()
@@ -4350,7 +4474,7 @@ do
 					and HoldingModifiers == true
 					and (
 						SpecialKeysInput[Input.UserInputType] == Key
-						or (Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode.Name == Key)
+							or (Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode.Name == Key)
 					)
 				then
 					HoldingKey = true
@@ -5154,7 +5278,7 @@ do
 					Dragging
 					and (
 						input.UserInputType == Enum.UserInputType.MouseMovement
-						or input.UserInputType == Enum.UserInputType.Touch
+							or input.UserInputType == Enum.UserInputType.Touch
 					)
 				then
 					local curPos = Vector2.new(input.Position.X, input.Position.Y)
@@ -9127,16 +9251,20 @@ do
 		local DepGroupboxList
 
 		do
+			-- v4.6.11: nested di dalam kartu/tabbox -> transparency 1 (ngikut induk).
+			local Nested = Library:IsInsideSurfaceCard(BoxHolder)
 			DepGroupboxContainer = New("Frame", {
 				BackgroundColor3 = function()
 					return Library:GetGroupSurfaceColor()
 				end,
-				BackgroundTransparency = ClampTransparency(Library.Surface.GroupTransparency),
+				BackgroundTransparency = Nested and 1 or ClampTransparency(Library.Surface.GroupTransparency),
 				Size = UDim2.fromScale(1, 0),
 				Visible = false,
 				Parent = BoxHolder,
 			})
-			Library.SurfaceGroups[DepGroupboxContainer] = true
+			if not Nested then
+				Library.SurfaceGroups[DepGroupboxContainer] = true
+			end
 			table.insert(
 				Library.Corners,
 				New("UICorner", {
@@ -10361,6 +10489,7 @@ function Library:CreateWindow(WindowInfo)
 	--// Window Table \\--
 	local Window = {}
 	local Fading = false
+	local FadeToken = 0 -- v4.7.7: token toggle terakhir (reversal aman, finalizer lama batal)
 
 	local function SetUICorner(UICorner, Corner, HalfCurrent, HalfValue, Value)
 		local Current = UICorner[Corner]
@@ -10687,6 +10816,11 @@ function Library:CreateWindow(WindowInfo)
 		local TabButton: TextButton
 		local TabLabel
 		local TabIcon
+		local TabIconStroke
+		local TabIconScale
+		local TabRec -- v4.7.5: scope function (BUG v4.7.0-7.4: semua patch tab
+		-- malah masuk AddKeyTab; AddTab asli = fungsi ini, nggak kepatch sama
+		-- sekali -> rec=0, zoom mati, stroke mati. Ketemu dari DEBUG rec=0.)
 
 		local TabContainer
 		local TabCanvas
@@ -10697,7 +10831,8 @@ function Library:CreateWindow(WindowInfo)
 		do
 			TabButton = New("TextButton", {
 				BackgroundColor3 = "MainColor",
-				BackgroundTransparency = 1,
+				-- v4.7.5: background dikit di SEMUA tab (AddTab asli)
+				BackgroundTransparency = Library.TabAppearance.TabBackgroundTransparency,
 				Size = UDim2.new(1, 0, 0, 44),
 				Text = "",
 				Parent = Tabs,
@@ -10735,6 +10870,8 @@ function Library:CreateWindow(WindowInfo)
 					Size = UDim2.fromOffset(24, 24),
 					Parent = TabButton,
 				})
+				-- v4.7.6: satu helper, nggak ada duplikat
+				TabIconStroke, TabIconScale = Library:CreateTabIconStroke(Icon, TabIcon)
 			end
 
 			table.insert(Library.TabButtons, {
@@ -10742,6 +10879,10 @@ function Library:CreateWindow(WindowInfo)
 				Padding = ButtonPadding,
 				Icon = TabIcon,
 			})
+
+			-- v4.7.5: rec ApplyTabAppearance di AddTab asli
+			TabRec = { Button = TabButton, Icon = TabIcon, Stroke = TabIconStroke, Scale = TabIconScale }
+			table.insert(Library.TabVisuals, TabRec)
 
 			--// Tab Canvas \\--
 			TabCanvas = New("CanvasGroup", {
@@ -11074,15 +11215,20 @@ function Library:CreateWindow(WindowInfo)
 			local TabboxButtons
 
 			do
+				-- v4.6.11: nested di dalam kartu group -> transparency 1 biar
+				-- kompositnya sama persis sama kartu (nggak dobel gelap).
+				local Nested = Library:IsInsideSurfaceCard(BoxHolder)
 				TabboxHolder = New("Frame", {
 					BackgroundColor3 = function()
 						return Library:GetGroupSurfaceColor()
 					end,
-					BackgroundTransparency = ClampTransparency(Library.Surface.GroupTransparency),
+					BackgroundTransparency = Nested and 1 or ClampTransparency(Library.Surface.GroupTransparency),
 					Size = UDim2.fromScale(1, 0),
 					Parent = BoxHolder,
 				})
-				Library.SurfaceGroups[TabboxHolder] = true
+				if not Nested then
+					Library.SurfaceGroups[TabboxHolder] = true
+				end
 				table.insert(
 					Library.Corners,
 					New("UICorner", {
@@ -11414,6 +11560,9 @@ function Library:CreateWindow(WindowInfo)
 			local GroupboxLine
 
 			do
+				-- v4.6.11: nested (mis. groupbox di dalam tabbox di dalam kartu)
+				-- -> transparency 1, komposit ngikut kartu induk.
+				local Nested = Library:IsInsideSurfaceCard(BoxHolder)
 				GroupboxHolder = New("Frame", {
 					-- N3V4: kartu group sekarang bisa dibedain dari background window
 					-- (GroupContrast) atau di-override warnanya (GroupColor). Warna
@@ -11423,11 +11572,13 @@ function Library:CreateWindow(WindowInfo)
 					BackgroundColor3 = function()
 						return Library:GetGroupSurfaceColor()
 					end,
-					BackgroundTransparency = ClampTransparency(Library.Surface.GroupTransparency),
+					BackgroundTransparency = Nested and 1 or ClampTransparency(Library.Surface.GroupTransparency),
 					Size = UDim2.fromScale(1, 0),
 					Parent = BoxHolder,
 				})
-				Library.SurfaceGroups[GroupboxHolder] = true
+				if not Nested then
+					Library.SurfaceGroups[GroupboxHolder] = true
+				end
 				table.insert(
 					Library.Corners,
 					New("UICorner", {
@@ -11727,6 +11878,8 @@ function Library:CreateWindow(WindowInfo)
 					ImageTransparency = Hovering and 0.25 or 0.5,
 				}):Play()
 			end
+			-- v4.7.6: zoom hover lewat helper
+			Library:TweenTabZoom(TabIconScale, Hovering and Library.TabAppearance.HoverZoom or 1)
 		end
 
 		function Tab:Show()
@@ -11738,8 +11891,10 @@ function Library:CreateWindow(WindowInfo)
 				Library.ActiveTab:Hide()
 			end
 
+			-- v4.7.5: bg aktif + zoom aktif di AddTab asli
+			TabButton.BackgroundColor3 = Library.TabAppearance.ActiveBackgroundColor
 			TweenService:Create(TabButton, Library.TweenInfo, {
-				BackgroundTransparency = 0,
+				BackgroundTransparency = Library.TabAppearance.ActiveBackgroundTransparency,
 			}):Play()
 			TweenService:Create(TabLabel, Library.TweenInfo, {
 				TextTransparency = 0,
@@ -11749,6 +11904,8 @@ function Library:CreateWindow(WindowInfo)
 					ImageTransparency = 0,
 				}):Play()
 			end
+			-- v4.7.6: zoom aktif lewat helper
+			Library:TweenTabZoom(TabIconScale, Library.TabAppearance.ActiveZoom)
 
 			if Description then
 				Window:ShowTabInfo(Name, Description)
@@ -11765,8 +11922,10 @@ function Library:CreateWindow(WindowInfo)
 		end
 
 		function Tab:Hide()
+			-- v4.7.5: bg semua tab + zoom balik di AddTab asli
+			TabButton.BackgroundColor3 = Library.Scheme.MainColor
 			TweenService:Create(TabButton, Library.TweenInfo, {
-				BackgroundTransparency = 1,
+				BackgroundTransparency = Library.TabAppearance.TabBackgroundTransparency,
 			}):Play()
 
 			TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -11778,6 +11937,8 @@ function Library:CreateWindow(WindowInfo)
 					ImageTransparency = 0.5,
 				}):Play()
 			end
+			-- v4.7.6: zoom balik lewat helper
+			Library:TweenTabZoom(TabIconScale, 1)
 
 			Library:PlayTabAnimation(TabCanvas, false)
 			Window:HideTabInfo()
@@ -11858,6 +12019,7 @@ function Library:CreateWindow(WindowInfo)
 			Tab:Show()
 		end)
 
+		TabRec.Tab = Tab -- v4.7.5: AddTab asli
 		Library.Tabs[Name] = Tab
 
 		return Tab
@@ -11884,6 +12046,11 @@ function Library:CreateWindow(WindowInfo)
 		local TabButton: TextButton
 		local TabLabel
 		local TabIcon
+		local TabIconStroke
+		local TabIconScale
+		local TabRec -- v4.7.3: HARUS di scope luar do-block (bug v4.7.0-7.2:
+		-- local-nya kedelep di dalam do -> "TabRec.Tab = Tab" di akhir AddTab
+		-- jadi nil-global = AddTab error tiap tab = semua efek tab mati)
 
 		local TabCanvas
 		local TabContainer
@@ -11892,7 +12059,8 @@ function Library:CreateWindow(WindowInfo)
 		do
 			TabButton = New("TextButton", {
 				BackgroundColor3 = "MainColor",
-				BackgroundTransparency = 1,
+				-- v4.7.0: background dikit di SEMUA tab (baseline 70% transparency)
+				BackgroundTransparency = Library.TabAppearance.TabBackgroundTransparency,
 				Size = UDim2.new(1, 0, 0, 44),
 				Text = "",
 				Parent = Tabs,
@@ -11929,6 +12097,8 @@ function Library:CreateWindow(WindowInfo)
 					Size = UDim2.fromOffset(24, 24),
 					Parent = TabButton,
 				})
+				-- v4.7.6: satu helper, nggak ada duplikat
+				TabIconStroke, TabIconScale = Library:CreateTabIconStroke(Icon, TabIcon)
 			end
 
 			table.insert(Library.TabButtons, {
@@ -11936,6 +12106,10 @@ function Library:CreateWindow(WindowInfo)
 				Padding = ButtonPadding,
 				Icon = TabIcon,
 			})
+
+			-- v4.7.0: rec buat ApplyTabAppearance (stroke/bg/zoom semua tab)
+			TabRec = { Button = TabButton, Icon = TabIcon, Stroke = TabIconStroke, Scale = TabIconScale }
+			table.insert(Library.TabVisuals, TabRec)
 
 			--// Tab Canvas \\--
 			TabCanvas = New("CanvasGroup", {
@@ -12088,6 +12262,8 @@ function Library:CreateWindow(WindowInfo)
 					ImageTransparency = Hovering and 0.25 or 0.5,
 				}):Play()
 			end
+			-- v4.7.6: zoom hover lewat helper
+			Library:TweenTabZoom(TabIconScale, Hovering and Library.TabAppearance.HoverZoom or 1)
 		end
 
 		function Tab:Show()
@@ -12099,8 +12275,10 @@ function Library:CreateWindow(WindowInfo)
 				Library.ActiveTab:Hide()
 			end
 
+			-- v4.7.0: bg tab aktif = tint accent tipis + icon zoom nantahan
+			TabButton.BackgroundColor3 = Library.TabAppearance.ActiveBackgroundColor
 			TweenService:Create(TabButton, Library.TweenInfo, {
-				BackgroundTransparency = 0,
+				BackgroundTransparency = Library.TabAppearance.ActiveBackgroundTransparency,
 			}):Play()
 
 			TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -12112,6 +12290,8 @@ function Library:CreateWindow(WindowInfo)
 					ImageTransparency = 0,
 				}):Play()
 			end
+			-- v4.7.6: zoom aktif lewat helper
+			Library:TweenTabZoom(TabIconScale, Library.TabAppearance.ActiveZoom)
 
 			Library:PlayTabAnimation(TabCanvas, true)
 
@@ -12129,8 +12309,10 @@ function Library:CreateWindow(WindowInfo)
 		end
 
 		function Tab:Hide()
+			-- v4.7.0: balik ke bg semua tab + zoom icon balik 1
+			TabButton.BackgroundColor3 = Library.Scheme.MainColor
 			TweenService:Create(TabButton, Library.TweenInfo, {
-				BackgroundTransparency = 1,
+				BackgroundTransparency = Library.TabAppearance.TabBackgroundTransparency,
 			}):Play()
 
 			TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -12142,6 +12324,8 @@ function Library:CreateWindow(WindowInfo)
 					ImageTransparency = 0.5,
 				}):Play()
 			end
+			-- v4.7.6: zoom balik lewat helper
+			Library:TweenTabZoom(TabIconScale, 1)
 
 			Library:PlayTabAnimation(TabCanvas, false)
 			Window:HideTabInfo()
@@ -12173,6 +12357,7 @@ function Library:CreateWindow(WindowInfo)
 		Tab.Container = TabContainer
 		setmetatable(Tab, BaseGroupbox)
 
+		TabRec.Tab = Tab -- v4.7.0: buat ApplyTabAppearance tau tab aktif
 		Library.Tabs[Name] = Tab
 
 		return Tab
@@ -12283,34 +12468,36 @@ function Library:CreateWindow(WindowInfo)
 			Parent = TitleRow,
 		})
 
+		-- v4.7.9: icon dialog = OPSI. Info.Icon nil/false = tanpa icon.
+		-- Kalau diisi: glyph di POJOK KANAN ATAS baris judul (mirip notif:
+		-- warna AccentColor, atau Info.IconColor), judul nyisihin tempat.
+		local DialogIconWidth = 0
 		if Info.Icon then
 			local ParsedIcon = Library:GetCustomIcon(Info.Icon)
 			if ParsedIcon then
-				local IconImg = New("ImageLabel", {
+				DialogIconWidth = 24
+				New("ImageLabel", {
 					BackgroundTransparency = 1,
-					Size = UDim2.fromOffset(16, 16),
+					Size = UDim2.fromOffset(18, 18),
 					Image = ParsedIcon.Url,
-					ImageColor3 = "FontColor",
+					ImageColor3 = Info.IconColor or "AccentColor",
 					ImageRectOffset = ParsedIcon.ImageRectOffset,
 					ImageRectSize = ParsedIcon.ImageRectSize,
-					LayoutOrder = 1,
+					LayoutOrder = 2,
 					ZIndex = 9002,
 					Parent = TitleRow,
 				})
-				if Info.TitleColor then
-					IconImg.ImageColor3 = Info.TitleColor
-				end
 			end
 		end
 
 		local TitleLabel = New("TextLabel", {
 			BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, 18),
+			Size = UDim2.new(1, -DialogIconWidth, 0, 18),
 			AutomaticSize = Enum.AutomaticSize.Y,
 			Text = Info.Title,
 			TextSize = 18,
 			TextXAlignment = Enum.TextXAlignment.Left,
-			LayoutOrder = 2,
+			LayoutOrder = 1,
 			ZIndex = 9002,
 			Parent = TitleRow,
 		})
@@ -12478,6 +12665,7 @@ function Library:CreateWindow(WindowInfo)
 			if FooterButtonsList[ButtonIdx] then
 				FooterButtonsList[ButtonIdx].Container:Destroy()
 				FooterButtonsList[ButtonIdx] = nil
+				Dialog:Resize() -- v4.7.9: holder/separator nyusul update
 			end
 		end
 
@@ -12655,6 +12843,12 @@ function Library:CreateWindow(WindowInfo)
 			end
 
 			FooterButtonsList[ButtonIdx] = ButtonWrap
+
+			-- v4.7.9: BUG LAMA — tombol yang ditambah SETELAH AddDialog nggak
+			-- pernah keliatan: Resize awal jalan pas FooterButtonsList masih
+			-- kosong => ButtonsHolder/_Sep2 Visible=false, nggak di-update
+			-- lagi. Resize di sini bikin holder + separator langsung muncul.
+			Dialog:Resize()
 		end
 
 		for BIdx, BInfo in Info.FooterButtons do
@@ -12678,31 +12872,72 @@ function Library:CreateWindow(WindowInfo)
 	local TextProperties = { "BackgroundTransparency", "TextTransparency" }
 	local StrokeProperties = { "Transparency" }
 
-	local function FadeInstance(Desc, Properties)
+	-- v4.7.7: fade buka/tutup window DITULIS ULANG. Bug versi lama:
+	-- (1) buka makan 1.5x durasi — task.wait(FadeTime/2) nge-block, shell
+	--     nongol duluan, konten nyusul = fase "layar hitam";
+	-- (2) ratusan TweenService:Create tiap toggle = frame drop pas baru kebuka;
+	-- (3) guard Fading versi lama nelan pencetan cepet + cache rest-value
+	--     bisa ke-capture mid-tween = transparency basi = glitch abis buka.
+	-- Sekarang: semua elemen fade BARENGAN (total = FadeTime persis, dark
+	-- surface & konten naik proporsional = nggak ada layar hitam); 1 tween
+	-- gabungan per instance, DI-CACHE & dipakai ulang (steady state cuma
+	-- Play(), mulai dari nilai sekarang = reversal mulus, nol Create = nol
+	-- hitch; Sig ngikut TweenInfo jadi knob durasi langsung kepake); token
+	-- = toggle di tengah fade jadi reversal, bukan ditelan; cache rest HANYA
+	-- di-capture pas rest; open pertama (belum ada cache) fade beneran.
+	local function FadeInstance(Desc, Properties, Opening, CanCapture)
 		local Cache = TransparencyCache[Desc]
 		if not Cache then
 			Cache = {}
 			TransparencyCache[Desc] = Cache
 		end
 
+		local Info = Library.WindowAnimationInfo
+		local Goals = {}
+		local Sig = Info.Time .. "|" .. Info.EasingStyle.Name .. "|" .. Info.EasingDirection.Name .. "|"
+
 		for _, Prop in Properties do
-			if not Library.Toggled then
-				Cache[Prop] = Desc[Prop]
+			local Rest = Cache[Prop]
+
+			if Rest == nil then
+				-- pertama kali ketemu: nilai sekarang = rest value authored
+				Rest = Desc[Prop]
+				Cache[Prop] = Rest
+				if Opening and Rest ~= 1 then
+					Desc[Prop] = 1 -- sembunyiin tanpa jeda frame biar ikut fade
+				end
+			elseif not Opening and CanCapture then
+				-- close pas rest: refresh cache (nilai bisa berubah pas kebuka)
+				Rest = Desc[Prop]
+				Cache[Prop] = Rest
 			end
 
-			if Cache[Prop] ~= nil and Cache[Prop] ~= 1 then
-				TweenService:Create(Desc, Library.WindowAnimationInfo, {
-					[Prop] = Library.Toggled and Cache[Prop] or 1,
-				}):Play()
+			if Rest ~= nil and Rest ~= 1 then
+				local Target = if Opening then Rest else 1
+				Goals[Prop] = Target
+				Sig ..= Prop .. "=" .. Target .. ";"
 			end
 		end
-	end
 
-	function Window:Toggle(Value: boolean?)
-		if Fading then
+		if next(Goals) == nil then
 			return
 		end
 
+		local Dir = if Opening then "in" else "out"
+		local Tweens = FadeTweenCache[Desc]
+		if not Tweens then
+			Tweens = {}
+			FadeTweenCache[Desc] = Tweens
+		end
+
+		if Tweens[Dir] == nil or Tweens[Dir .. "Sig"] ~= Sig then
+			Tweens[Dir] = TweenService:Create(Desc, Info, Goals)
+			Tweens[Dir .. "Sig"] = Sig
+		end
+		Tweens[Dir]:Play()
+	end
+
+	function Window:Toggle(Value: boolean?)
 		if Library.ActiveLoading then
 			if Value == true then
 				return
@@ -12717,18 +12952,18 @@ function Library:CreateWindow(WindowInfo)
 
 		if Library.Animations and Library.Animations.ToggleWindow == true then
 			local FadeTime = Library.WindowAnimationInfo.Time
+			local Reverse = Fading -- fade lama masih jalan = reversal, jangan telan pencetan
+			local CanCapture = not Reverse
 			Fading = true
+			FadeToken += 1
+			local Token = FadeToken
+			local Opening = Library.Toggled
 
-			if Library.Toggled then
+			if Opening then
 				MainFrame.Visible = true
 			end
 
-			if Library.Toggled then
-				FadeInstance(MainFrame, { "BackgroundTransparency" })
-				task.wait(FadeTime / 2)
-			else
-				task.delay(FadeTime / 2, FadeInstance, MainFrame, { "BackgroundTransparency" })
-			end
+			FadeInstance(MainFrame, GuiProperties, Opening, CanCapture)
 
 			for _, Instance in MainFrame:GetDescendants() do
 				if Instance == TopBar then
@@ -12738,24 +12973,28 @@ function Library:CreateWindow(WindowInfo)
 				if Instance:IsA("GuiObject") then
 					local ClassName = Instance.ClassName
 					if ClassName == "ImageLabel" or ClassName == "ImageButton" then
-						FadeInstance(Instance, ImageProperties)
+						FadeInstance(Instance, ImageProperties, Opening, CanCapture)
 					elseif ClassName == "TextLabel" or ClassName == "TextBox" or ClassName == "TextButton" then
-						FadeInstance(Instance, TextProperties)
+						FadeInstance(Instance, TextProperties, Opening, CanCapture)
 					else
-						FadeInstance(Instance, GuiProperties)
+						FadeInstance(Instance, GuiProperties, Opening, CanCapture)
 					end
 				elseif Instance.ClassName == "UIStroke" then
-					FadeInstance(Instance, StrokeProperties)
+					FadeInstance(Instance, StrokeProperties, Opening, CanCapture)
 				end
 			end
 
 			task.delay(FadeTime, function()
+				if Token ~= FadeToken then
+					return -- toggle yang lebih baru udah ambil alih
+				end
 				MainFrame.Visible = Library.Toggled
 				Fading = false
 			end)
 		else
 			MainFrame.Visible = Library.Toggled
 		end
+
 
 		if WindowInfo.UnlockMouseWhileOpen then
 			ModalElement.Modal = Library.Toggled
@@ -13027,6 +13266,11 @@ function Library:CreateWindow(WindowInfo)
 	Library:GiveSignal(UserInputService.WindowFocusReleased:Connect(function()
 		Library.IsRobloxFocused = false
 	end))
+
+	-- v4.7.4: auto-apply + bukti di Output pas window pertama jadi. Kalau
+	-- tabVisuals=0 padahal tab ada, berarti rec AddTab nggak kebentuk.
+	Library:ApplyTabAppearance()
+	print(string.format("[N3V4 Library] window ready: tabVisuals=%d (0 padahal ada tab = dump DEBUG di setingan)", #Library.TabVisuals))
 
 	Library.Window = Window
 	return Window
@@ -13469,7 +13713,7 @@ function Library:CreateDashboardWindow(Info)
 		TxtIncome.Text = string.format('<font color="#57F287"><b>+$%s/s</b></font>', targetData.Income or "0")
 
 		local mutTag = (targetData.Mutation and targetData.Mutation ~= "")
-				and (' · <font color="#FFAA00">' .. targetData.Mutation .. "</font>")
+			and (' · <font color="#FFAA00">' .. targetData.Mutation .. "</font>")
 			or ""
 		TxtStats.Text =
 			string.format("%.2fx · %s Kg%s", targetData.Scale or 1, tostring(targetData.Weight or 0), mutTag)
@@ -14351,6 +14595,7 @@ function Library:Unload()
 	table.clear(Library.DependencyBoxes)
 
 	table.clear(TransparencyCache)
+	table.clear(FadeTweenCache)
 	table.clear(ActiveTabTweens)
 
 	Library.Toggle = function(...) end
