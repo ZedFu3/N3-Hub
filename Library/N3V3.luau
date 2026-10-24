@@ -14,7 +14,7 @@ local TweenService: TweenService = cloneref(game:GetService("TweenService"))
 local Visuals = nil
 local VisualsMissing = "[N3V4] ModuleScript N3V4Visuals ga ketemu — fitur viewport 3D + spotlight card MATI. Bikin ModuleScript bernama N3V4Visuals SEBELAH ModuleScript N3V4 di ReplicatedStorage, isinya dari file Library/N3V4Visuals.module.lua, lalu Play ulang."
 do
-	local Found = script.Parent and script.Parent:FindFirstChild("N3V4Visuals")
+	local Found = script.Parent and script.Parent:FindFirstChild("N3V4Visuals.luau")
 	if Found then
 		local Ok, Mod = pcall(require, Found)
 		if Ok and type(Mod) == "table" and type(Mod.AddViewport) == "function" and type(Mod.AddSpotlightCard) == "function" then
