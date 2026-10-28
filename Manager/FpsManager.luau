@@ -15,7 +15,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local FpsManager = {
 	Library = nil,
-	Icon = "rbxthumb://type=Asset&id=87352020607749&w=150&h=150", -- Public 4-Bar Ping / ms Icon
+	Icon = "rbxassetid://98894951", -- Public 4-Bar Ping / ms Icon
 	Disposed = false,
 	Config = {
 		FpsCap = 240,
